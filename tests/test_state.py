@@ -86,3 +86,43 @@ class StateTests(unittest.TestCase):
         state = LeisureState()
         state.refresh_targets([origin])
         self.assertIn(origin, LeisureState.from_dict({"targets": {origin: {}}}).targets)
+
+    def test_happy_company_is_more_attractive_than_perfunctory_or_hurtful_contact(self):
+        warm, cold, hurt = TargetState(), TargetState(), TargetState()
+        for target, feeling, desire in [(warm, "delighted", "eager"), (cold, "neutral", "hesitant"), (hurt, "hurt", "avoid")]:
+            target.remember({"feeling": feeling, "desire": desire, "contact": "welcome",
+                             "note": "这段相处留下的感觉", "shared_interests": [], "next_topic": ""}, 100, 300)
+        self.assertGreater(warm.attraction(), cold.attraction() * 5)
+        self.assertGreater(cold.attraction(), hurt.attraction())
+
+    def test_silence_is_not_rewarded_by_waiting_longer_and_stops_chasing(self):
+        state = LeisureState()
+        state.refresh_targets(["warm", "silent"])
+        for now in (100000, 100100):
+            state.reserve("silent", "hello", now)
+        options = dict(global_gap=0, target_gap=0, unanswered_limit=2, backoff=1000,
+                       daily_limit=0, unanswered_policy="wait_for_reply")
+        self.assertEqual(state.eligible(900000, **options), ["warm"])
+        state.engage("silent", 900001, 100)
+        self.assertIn("silent", state.eligible(900002, **options))
+
+    def test_sincere_new_interactions_can_repair_an_old_bad_impression(self):
+        target = TargetState()
+        for _ in range(3):
+            target.remember({"feeling": "hurt", "desire": "avoid", "contact": "welcome",
+                             "note": "聊着不太舒服", "shared_interests": [], "next_topic": ""}, 100, 300)
+        before = target.attraction()
+        target.remember({"feeling": "enjoyed", "desire": "open", "contact": "welcome",
+                         "note": "这次认真聊开了，有一点回暖", "shared_interests": ["猫"], "next_topic": "想接着聊猫"}, 200, 300)
+        self.assertGreater(target.attraction(), before)
+        self.assertEqual(target.shared_interests, ["猫"])
+
+    def test_old_installation_gets_neutral_social_memory_and_new_memory_survives_restart(self):
+        state = LeisureState.from_dict({"targets": {"friend": {"last_sent": 100, "unanswered": 1}}})
+        self.assertEqual(state.targets["friend"].impressions, [])
+        state.targets["friend"].remember({"feeling": "enjoyed", "desire": "eager", "contact": "welcome",
+                                         "note": "聊完还想接着玩", "shared_interests": ["音乐"], "next_topic": "想听那首歌"}, 100, 300)
+        from dataclasses import asdict
+
+        restored = LeisureState.from_dict(asdict(state))
+        self.assertEqual(restored.targets["friend"].next_topic, "想听那首歌")

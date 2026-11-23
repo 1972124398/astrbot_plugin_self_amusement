@@ -1,7 +1,7 @@
 name: astrbot_plugin_self_amusement
 display_name: 自娱自乐
-desc: AI 闲下来时自己找乐子，向群聊或私聊自然搭话、碎碎念、上网闲逛与分享见闻。
-version: 0.1.0
+desc: AI 无聊时自然找乐子，偏向聊得开心的群与朋友，冷场就先放下，也会带着共同兴趣回来搭话。
+version: 0.2.0
 author: W1
 repo: https://github.com/1972124398/astrbot_plugin_self_amusement
 astrbot_version: ">=4.29.4,<5"

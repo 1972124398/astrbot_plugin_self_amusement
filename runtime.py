@@ -61,6 +61,20 @@ class Runtime:
     def __init__(self, context):
         self.context = context
 
+    def persona(self, event, request):
+        persona_id = event.get_extra("_trace_persona_id")
+        if persona_id == "[%None]":
+            return ""
+        if persona_id and persona_id != "_chatui_default_":
+            persona = self.context.persona_manager.get_persona_v3_by_id(persona_id)
+            if persona:
+                return str(persona.get("prompt", ""))
+        if persona_id == "_chatui_default_":
+            from astrbot.core.astr_main_agent_resources import CHATUI_SPECIAL_DEFAULT_PERSONA_PROMPT
+
+            return CHATUI_SPECIAL_DEFAULT_PERSONA_PROMPT
+        return request.system_prompt or ""
+
     def platform(self, origin):
         session = MessageSession.from_str(origin)
         if session.message_type not in {MessageType.FRIEND_MESSAGE, MessageType.GROUP_MESSAGE}:

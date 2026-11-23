@@ -40,6 +40,59 @@ class TargetState:
     unanswered: int = 0
     label: str = ""
     sender_id: str = ""
+    interaction_version: int = 0
+    impressions: list[dict] = field(default_factory=list)
+    shared_interests: list[str] = field(default_factory=list)
+    next_topic: str = ""
+    wants_space: bool = False
+    available_after: float = 0
+
+    def remember(self, impression: dict, now: float, busy_delay: float):
+        self.impressions.append({key: impression[key] for key in ("feeling", "desire", "contact", "note")})
+        self.impressions = self.impressions[-6:]
+        self.shared_interests = list(dict.fromkeys([*impression["shared_interests"], *self.shared_interests]))[:6]
+        self.next_topic = impression["next_topic"] or self.next_topic
+        self.wants_space = impression["contact"] == "space"
+        self.available_after = now + busy_delay if impression["contact"] == "busy" else 0
+
+    def impression(self) -> dict:
+        return {
+            "recent_feelings": self.impressions[-4:],
+            "shared_interests": self.shared_interests,
+            "next_topic": self.next_topic,
+            "unanswered": self.unanswered,
+        }
+
+    def attraction(self, strength="natural") -> float:
+        feelings = {"delighted": 5.0, "enjoyed": 2.8, "neutral": 1.0, "drained": 0.35, "hurt": 0.12}
+        desires = {"eager": 1.5, "open": 1.0, "hesitant": 0.55, "avoid": 0.2}
+        if self.impressions:
+            recent = self.impressions[-4:]
+            weight = sum((index + 1) * feelings.get(item.get("feeling"), 1) for index, item in enumerate(recent))
+            weight /= sum(range(1, len(recent) + 1))
+            weight *= desires.get(recent[-1].get("desire"), 1)
+        else:
+            weight = 1.0
+        exponent = {"gentle": 0.5, "natural": 1.0, "strong": 1.5}.get(strength, 1.0)
+        return weight ** exponent / (1 + self.unanswered) ** 2
+
+    def social_description(self) -> str:
+        if self.wants_space:
+            return "先不打扰，等对方愿意再聊"
+        if self.unanswered >= 2:
+            return "前面没接上话，先去找点别的乐子"
+        if self.impressions:
+            return self.impressions[-1]["note"]
+        return "还没太熟，想慢慢看看聊不聊得来"
+
+    def forget(self):
+        self.impressions.clear()
+        self.shared_interests.clear()
+        self.next_topic = ""
+        self.wants_space = False
+        self.available_after = 0
+        self.unanswered = 0
+        self.interaction_version += 1
 
 
 @dataclass
@@ -76,6 +129,12 @@ class LeisureState:
                     unanswered=int(number(target.get("unanswered"), 0, 0, 1e6)),
                     label=str(target.get("label", ""))[:100],
                     sender_id=str(target.get("sender_id", ""))[:200],
+                    interaction_version=int(number(target.get("interaction_version"), 0, 0, 1e12)),
+                    impressions=[item for item in target.get("impressions", [])[-6:] if isinstance(item, dict)],
+                    shared_interests=[str(item)[:60] for item in target.get("shared_interests", [])[:6]],
+                    next_topic=str(target.get("next_topic", ""))[:180],
+                    wants_space=target.get("wants_space") is True,
+                    available_after=number(target.get("available_after"), 0, 0, 1e12),
                 )
         return state
 
@@ -98,6 +157,9 @@ class LeisureState:
             if human:
                 target.last_received = now
                 target.unanswered = 0
+                target.wants_space = False
+                target.available_after = 0
+                target.interaction_version += 1
                 target.label = label or target.label
                 target.sender_id = sender_id or target.sender_id
             else:
@@ -114,13 +176,14 @@ class LeisureState:
             self.day = today
             self.sent_today = 0
 
-    def eligible(self, now: float, *, global_gap: float, target_gap: float, unanswered_limit: int, backoff: float, daily_limit: int):
+    def eligible(self, now: float, *, global_gap: float, target_gap: float, unanswered_limit: int, backoff: float, daily_limit: int, unanswered_policy="occasionally"):
         self.refresh_day(now)
         if now - self.last_outbound < global_gap or (daily_limit and self.sent_today >= daily_limit):
             return []
         return [origin for origin, target in self.targets.items()
-                if now - target.last_sent >= target_gap
-                and (not unanswered_limit or target.unanswered < unanswered_limit or now - target.last_sent >= backoff)]
+                if now - target.last_sent >= target_gap and now >= target.available_after and not target.wants_space
+                and (not unanswered_limit or target.unanswered < unanswered_limit
+                     or (unanswered_policy == "occasionally" and now - target.last_sent >= backoff))]
 
     def reserve(self, origin: str, text: str, now: float):
         self.refresh_day(now)

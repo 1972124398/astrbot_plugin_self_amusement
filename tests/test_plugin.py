@@ -54,6 +54,7 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         self.context = SimpleNamespace(
             get_config=lambda **_: {"plugin_set": ["*"]},
             llm_generate=AsyncMock(side_effect=lambda **_: SimpleNamespace(completion_text=json.dumps(self.plan))),
+            get_current_chat_provider_id=AsyncMock(return_value="model"),
         )
         with patch("astrbot_plugin_self_amusement.main.StarTools.get_data_dir", return_value=Path(self.directory.name)):
             self.plugin = SelfAmusement(self.context, {"targets": [self.origin], "quiet_hours": ""})
@@ -62,6 +63,7 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
             platform=lambda _: (None, None), view=AsyncMock(return_value=self.view),
             mood=lambda: {"inner_state": "有点闲，想找人聊聊"},
             enabled=AsyncMock(return_value=True),
+            persona=lambda event, request: request.system_prompt or "自然的朋友",
             draft=AsyncMock(return_value="突然想问，你最近有什么觉得特别好玩的事吗？"),
             deliver=AsyncMock(return_value=True),
         )
@@ -169,3 +171,57 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         self.plugin.runtime.draft.side_effect = draft
         await self.plugin.cycle()
         self.plugin.runtime.deliver.assert_not_awaited()
+
+    async def test_conversation_reflection_runs_after_reply_in_the_background(self):
+        event = FakeEvent()
+        await self.plugin.observe_request(event, ProviderRequest(prompt="你这个梗好好笑", system_prompt="自然的朋友"))
+        await self.plugin.observe_response(event, SimpleNamespace(completion_text="就知道你能接住！"))
+        self.context.llm_generate.assert_not_awaited()
+        impression = {"feeling": "delighted", "desire": "eager", "contact": "welcome",
+                      "note": "接梗很开心", "shared_interests": ["冷笑话"], "next_topic": "还想接着玩刚才的梗"}
+        self.context.llm_generate.side_effect = None
+        self.context.llm_generate.return_value = SimpleNamespace(completion_text=json.dumps(impression))
+        job = self.plugin.reflection_jobs.pop(self.origin)
+        await self.plugin.reflect(job)
+        target = self.plugin.state.targets[self.origin]
+        self.assertEqual(target.impressions[-1]["feeling"], "delighted")
+        self.assertEqual(target.shared_interests, ["冷笑话"])
+        self.assertGreater(self.plugin.attraction(self.origin, time.time()), 1)
+
+    async def test_slow_old_reflection_cannot_override_a_new_interaction(self):
+        event = FakeEvent()
+        await self.plugin.observe_request(event, ProviderRequest(prompt="聊聊", system_prompt="朋友"))
+        await self.plugin.observe_response(event, SimpleNamespace(completion_text="好啊"))
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def slow(**kwargs):
+            started.set()
+            await release.wait()
+            return SimpleNamespace(completion_text=json.dumps({"feeling": "hurt", "desire": "avoid", "contact": "space", "note": "旧印象", "shared_interests": [], "next_topic": ""}))
+
+        self.context.llm_generate.side_effect = slow
+        task = asyncio.create_task(self.plugin.reflect(self.plugin.reflection_jobs.pop(self.origin)))
+        await started.wait()
+        self.plugin.state.engage(self.origin, time.time(), 100)
+        release.set()
+        await task
+        self.assertEqual(self.plugin.state.targets[self.origin].impressions, [])
+
+    async def test_new_plan_uses_shared_interests_and_the_unfinished_topic(self):
+        target = self.plugin.state.targets[self.origin]
+        target.shared_interests = ["猫", "奇怪的冷知识"]
+        target.next_topic = "想接着听那只猫的故事"
+        await self.plugin.prepare(self.origin)
+        payload = json.loads(self.context.llm_generate.call_args.kwargs["prompt"])
+        self.assertEqual(payload["how_it_feels_with_you"]["next_topic"], target.next_topic)
+        self.assertEqual(payload["how_it_feels_with_you"]["shared_interests"], ["猫", "奇怪的冷知识"])
+
+    async def test_news_selection_prefers_a_shared_interest(self):
+        self.plan["action"] = "share"
+        self.plugin.state.targets[self.origin].shared_interests = ["猫"]
+        self.plugin.browser.search = AsyncMock(return_value={"mode": "rss", "results": [
+            {"title": "科技简讯", "url": "https://example.com/a", "snippet": "新闻"},
+            {"title": "猫的一个新发现", "url": "https://example.com/cat", "snippet": "研究者的新观察"},
+        ]})
+        _, _, text, _ = await self.plugin.prepare(self.origin)
+        self.assertTrue(text.endswith("https://example.com/cat"))

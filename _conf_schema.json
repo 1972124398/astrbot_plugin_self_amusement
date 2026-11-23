@@ -9,6 +9,25 @@
     "description": "闲逛和主动说话使用的模型", "type": "string", "default": "", "_special": "select_provider",
     "hint": "留空跟随所选会话的聊天模型。计划、浏览和主动消息都在后台完成。"
   },
+  "remember_chemistry": {
+    "description": "记住和谁相处开心",
+    "type": "bool", "default": true,
+    "hint": "聊完后在后台回想这段相处，开心、被接住、能接梗的会话更容易让它想主动找，敷衍或聊得累的会话会减少靠近。还会记住共同兴趣和没聊完的话头。"
+  },
+  "preference_strength": {
+    "description": "闲下来时多看重聊得来的感觉",
+    "type": "string", "default": "natural",
+    "options": ["gentle", "natural", "strong"],
+    "labels": ["温和一点，也愿意认识别人", "自然偏心，常找相处开心的", "更随心，明显偏向聊得来的"],
+    "hint": "群聊与私聊一起选择。它会带着自己的偏好去找人，新的真诚互动也能让之前疏远的会话慢慢回暖。"
+  },
+  "unanswered_policy": {
+    "description": "总是没人接话时怎么办",
+    "type": "string", "default": "wait_for_reply",
+    "options": ["wait_for_reply", "occasionally"],
+    "labels": ["先不搭理了，等对方回来", "歇一阵后偶尔想起再聊"],
+    "hint": "默认在达到下方未接话次数后不再主动找这个会话，去找别的聊得来的地方或自己玩。对方再次进入正常 AI 对话后会重新考虑。"
+  },
   "idle_min_minutes": {
     "description": "聊完后最早多久开始觉得无聊，单位分钟", "type": "int", "default": 15,
     "slider": {"min": 1, "max": 1440, "step": 1},
@@ -49,9 +68,9 @@
   "target_gap_minutes": {"description": "同一会话再次主动发话的最小间隔，单位分钟", "type": "int", "default": 60,
     "slider": {"min": 0, "max": 10080, "step": 1}, "hint": "所有目标使用同一个间隔，群聊和私聊共用。"},
   "max_unanswered": {"description": "连续没人接话时最多主动说几次", "type": "int", "default": 2,
-    "slider": {"min": 0, "max": 20, "step": 1}, "hint": "达到后让这个会话歇一会儿。0 表示不按次数退让。"},
+    "slider": {"min": 0, "max": 20, "step": 1}, "hint": "默认两次没接话就先放下，按上方选项等对方回来或歇一阵后偶尔再聊。0 表示不按次数放下。"},
   "unanswered_backoff_minutes": {"description": "没人接话时先歇多久，单位分钟", "type": "int", "default": 180,
-    "slider": {"min": 1, "max": 10080, "step": 1}},
+    "slider": {"min": 1, "max": 10080, "step": 1}, "hint": "选择歇一阵后偶尔想起再聊时使用。"},
   "daily_limit": {"description": "每天主动发话的总上限", "type": "int", "default": 12,
     "slider": {"min": 0, "max": 1000, "step": 1}, "hint": "群聊和私聊合计，按 AstrBot 主机日期统计。0 表示不设总次数。发送未确认的尝试也计入。"},
   "quiet_hours": {"description": "安静时段", "type": "string", "default": "00:00-08:00",
@@ -62,6 +81,8 @@
     "slider": {"min": 1, "max": 168, "step": 1}, "hint": "会参考最近 12 次活动，尽量避开相似开场和已经分享过的链接。"},
   "generation_timeout_seconds": {"description": "一轮琢磨与生成的超时秒数", "type": "int", "default": 60,
     "slider": {"min": 5, "max": 300, "step": 1}},
+  "reflection_timeout_seconds": {"description": "后台回想相处感受的最长等待秒数", "type": "int", "default": 30,
+    "slider": {"min": 5, "max": 120, "step": 1}, "hint": "只在后台回想，不增加当前对话等待。相邻对话可合并成最近的一次回想。"},
   "web_timeout_seconds": {"description": "联网查找的超时秒数", "type": "int", "default": 15,
     "slider": {"min": 1, "max": 90, "step": 1}},
   "send_timeout_seconds": {"description": "等待平台发送结果的超时秒数", "type": "int", "default": 30,
