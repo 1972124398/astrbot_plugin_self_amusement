@@ -1,0 +1,116 @@
+<div align="center">
+
+<h1>AstrBot 自娱自乐</h1>
+<p>闲下来就自己找点乐子，偶尔碎碎念，也会带着小发现来搭话。</p>
+
+<p>
+  <a href="https://github.com/1972124398/astrbot_plugin_self_amusement/releases/latest"><img src="https://img.shields.io/github/v/release/1972124398/astrbot_plugin_self_amusement?style=flat-square&color=2563eb" alt="最新版本"></a>
+  <a href="https://github.com/1972124398/astrbot_plugin_self_amusement/actions/workflows/test.yml"><img src="https://github.com/1972124398/astrbot_plugin_self_amusement/actions/workflows/test.yml/badge.svg?branch=main" alt="测试状态"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-0BSD-64748b?style=flat-square" alt="0BSD 许可证"></a>
+</p>
+
+<p>
+  <a href="https://github.com/1972124398/astrbot_plugin_self_amusement/releases/latest/download/astrbot_plugin_self_amusement.zip"><strong>下载 ZIP</strong></a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="docs/CONFIGURATION.md">配置参考</a> ·
+  <a href="https://github.com/1972124398/astrbot_plugin_self_amusement/issues/new/choose">问题反馈</a>
+</p>
+
+</div>
+
+## 它会做什么
+
+让 AI 在正常聊天之外有一点自己的闲暇。闲下来后，它结合当前人格、心境、最近的话题和兴趣，决定这会儿想做点什么。
+
+| 活动 | 可能的表现 |
+| --- | --- |
+| 搭讪聊天 | 突然好奇一件小事，找熟悉的人或群聊聊 |
+| 碎碎念 | 一个脑洞、一点吐槽、随口的自问自答 |
+| 上网闲逛 | 看看感兴趣的内容，可以自己看完先记着 |
+| 分享见闻 | 带一条真实来源和自己的感想，顺势开个话头 |
+| 继续发呆 | 没有想说的，先自己待一会儿 |
+
+群聊和私聊在**同一个会话列表**里选择，共用一套节奏、兴趣与行为设置。它使用一个全局空闲状态，正常 AI 对话会重新计算空闲时间。
+
+## 快速开始
+
+需要 **AstrBot `>=4.29.4,<5`、Python 3.12+**，以及一个可用的聊天模型。消息平台需要支持主动消息。
+
+1. 在插件管理中通过下方仓库地址安装，或下载 ZIP 后从文件安装。
+2. 打开 **插件 → 自娱自乐 → 配置**。
+3. 在“可以主动搭话的会话”中一起选择需要的群聊和私聊。
+4. 保存后开始正常聊天，闲下来后它会自己琢磨活动。
+
+```text
+https://github.com/1972124398/astrbot_plugin_self_amusement
+```
+
+也可由管理员在目标会话发送 `/amuse_here`，把当前会话加入统一列表。默认目标为空，选择会话后才会开始主动活动。
+
+## 默认的日常节奏
+
+| 项目 | 默认值 |
+| --- | --- |
+| 聊完多久开始琢磨 | 随机等待 15～45 分钟 |
+| 两次主动发话 | 全局至少间隔 20 分钟 |
+| 同一个会话 | 主动发话至少间隔 60 分钟 |
+| 没人接话 | 连续两次后歇 180 分钟 |
+| 一天主动发起 | 所有会话合计最多 12 次 |
+| 安静时段 | AstrBot 主机时间 00:00～08:00 |
+| 消息长度 | 正文最多 220 字，分享另附来源 |
+
+这些参数都能在配置窗口修改。它有时会选择只浏览或发呆，因此到时间也可能没有消息。计划完成前若有人开始正常对话，会先放下这次主动发言。
+
+## 网上看看与分享
+
+优先复用目标会话在 AstrBot 中配置并启用的联网搜索。支持当前 SDK 内置的 Tavily、Bocha、Brave、Firecrawl、Baidu、Exa、AnySearch、DeepSeek 和 SerpApi 搜索。
+
+搜索不可用时，会读取配置中的 RSS / Atom 订阅。默认带有 Solidot 与 IT 之家，可替换成角色自己的兴趣来源。RSS 按订阅浏览，内容范围由所填源决定。
+
+分享从实际取得的材料里选一条，附上真实来源链接。资料不可用时，这轮可以先待着。浏览本身也可以留作自己的兴趣，之后再产生话头。
+
+## 命令
+
+以下命令需要 AstrBot 管理员权限。
+
+| 命令 | 用途 |
+| --- | --- |
+| `/amuse_here` | 把当前群聊或私聊加入统一目标列表 |
+| `/amuse_remove` | 把当前会话从列表中移除 |
+| `/amuse_status` | 查看正在做什么、下次活动时间与最近闲念 |
+| `/amuse_preview` | 在当前会话预览一次想法和发言，可产生模型及联网调用 |
+
+预览作为该命令的回复展示，自动活动的次数和节奏保持原值。
+
+## 和现有插件一起用
+
+- **短期共享情绪**可以提供此刻心境，并用其人格化表达修饰主动消息。主动活动本身沿用该插件的 `proactive:` 事件标识。
+- **消息合并与普通回复**继续处理正常聊天。主动消息在后台生成，下一轮正常回复会收到当前会话最近主动说过的话，方便接续。
+- **已有主动聊天插件**可以同时保留，但两者有各自计划。自娱自乐观察经过标准 LLM 钩子的对话和其他主动回复，从而重新计算自己的空闲时间。若同时对同一会话启用，可结合实际节奏调整。
+- **微信 Native**通过适配器已有发送接口投递，支持范围仍取决于平台本身的群聊或私聊能力。
+
+其他会话的聊天内容保留在原会话。当前活动参考目标会话的背景，共享的是闲暇节奏、兴趣念头与可选的情绪。
+
+## 配置、排错与反馈
+
+| 文档 | 内容 |
+| --- | --- |
+| [配置参考](docs/CONFIGURATION.md) | 统一目标、兴趣、联网方式、间隔和常见问题 |
+| [工作方式与开发](docs/DEVELOPMENT.md) | 后台流程、兼容方式、测试和已验证范围 |
+| [更新记录](CHANGELOG.md) | 版本变化 |
+
+普通对话只更新活动信息，计划、联网和生成都在后台完成。每次闲逛计划调用一次模型，决定发话时再调用一次生成正文；联网使用既有搜索配置或 RSS 服务。
+
+反馈时请提供 AstrBot 与插件版本、目标平台、活动类型、预期和实际表现，并隐藏私聊内容、账号与令牌。
+
+[提交问题](https://github.com/1972124398/astrbot_plugin_self_amusement/issues/new/choose)
+
+## 相关插件
+
+| 插件 | 用途 |
+| --- | --- |
+| [短期共享情绪](https://github.com/1972124398/astrbot_plugin_short_term_mood) | 共享心境、情绪余韵和人格化表达 |
+| [微信原生表情转图片](https://github.com/1972124398/astrbot_plugin_wechat_sticker_receiver) | 让视觉模型理解表情语气 |
+| [Codex 任务桥接](https://github.com/1972124398/astrbot_plugin_codex_bridge) | 私聊提交本机 Codex 后台任务 |
+
+采用 [0BSD 许可证](LICENSE)，允许使用、修改、分发和商用，无需保留署名。

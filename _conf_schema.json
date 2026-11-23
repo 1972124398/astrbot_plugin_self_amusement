@@ -1,0 +1,73 @@
+{
+  "enabled": {"description": "启用自娱自乐", "type": "bool", "default": true},
+  "targets": {
+    "description": "可以主动搭话的会话",
+    "type": "list", "default": [], "_special": "umo",
+    "hint": "群聊和私聊一起选择，共用下方的节奏与行为设置。可在目标会话用 /sid 查询 UMO，也可用管理员命令 /amuse_here 加入当前会话。"
+  },
+  "provider_id": {
+    "description": "闲逛和主动说话使用的模型", "type": "string", "default": "", "_special": "select_provider",
+    "hint": "留空跟随所选会话的聊天模型。计划、浏览和主动消息都在后台完成。"
+  },
+  "idle_min_minutes": {
+    "description": "聊完后最早多久开始觉得无聊，单位分钟", "type": "int", "default": 15,
+    "slider": {"min": 1, "max": 1440, "step": 1},
+    "hint": "与最长空闲时间组成随机区间。任何正常 AI 对话都会重新计算全局空闲时间。"
+  },
+  "idle_max_minutes": {
+    "description": "聊完后最晚多久琢磨活动，单位分钟", "type": "int", "default": 45,
+    "slider": {"min": 1, "max": 1440, "step": 1},
+    "hint": "达到时间后让模型想想做什么，也可以选择自己浏览或继续待着。数值小于最早时间时按最早时间计算。"
+  },
+  "activities": {
+    "description": "无聊时可以做的事", "type": "list",
+    "default": ["chat", "mutter", "browse", "share", "wait"],
+    "options": ["chat", "mutter", "browse", "share", "wait"],
+    "labels": ["搭话找人聊天", "碎碎念或自言自语", "自己上网逛逛", "看见有趣内容再分享", "发呆或继续待着"],
+    "hint": "角色结合人设、心境和当前会话自己选择。等待始终可选。"
+  },
+  "interests": {
+    "description": "闲下来会惦记的小兴趣", "type": "list",
+    "default": ["日常趣事", "冷知识", "科技新鲜事", "生活小发现"],
+    "hint": "可填游戏、宠物、文学、音乐或角色自己的爱好，帮助它找到自然的话头。"
+  },
+  "behavior_preferences": {
+    "description": "补充日常行为偏好", "type": "text", "default": "",
+    "hint": "例如：偶尔抛个脑洞，少问在不在，分享时带一点自己的吐槽。会结合所选会话的人格与共享情绪表达。"
+  },
+  "browse_enabled": {"description": "允许无聊时上网看看", "type": "bool", "default": true,
+    "hint": "优先复用 AstrBot 当前会话已配置并启用的联网搜索，未配置或不可用时读下方 RSS。自己浏览可以不发消息。"},
+  "rss_feeds": {
+    "description": "闲逛时可以读的 RSS 或 Atom 订阅", "type": "list",
+    "default": ["https://www.solidot.org/index.rss", "https://www.ithome.com/rss/"],
+    "hint": "可替换成自己的新闻、博客、兴趣订阅。RSS 为订阅浏览，内容取决于源。结果会附真实来源链接。"
+  },
+  "feed_max_age_hours": {"description": "订阅内容最多回看几小时", "type": "int", "default": 72,
+    "slider": {"min": 1, "max": 720, "step": 1}, "hint": "有明确日期的旧条目会跳过。无日期的资料会交给模型按未知日期理解。"},
+  "global_gap_minutes": {"description": "两次主动发话的全局最小间隔，单位分钟", "type": "int", "default": 20,
+    "slider": {"min": 0, "max": 1440, "step": 1}},
+  "target_gap_minutes": {"description": "同一会话再次主动发话的最小间隔，单位分钟", "type": "int", "default": 60,
+    "slider": {"min": 0, "max": 10080, "step": 1}, "hint": "所有目标使用同一个间隔，群聊和私聊共用。"},
+  "max_unanswered": {"description": "连续没人接话时最多主动说几次", "type": "int", "default": 2,
+    "slider": {"min": 0, "max": 20, "step": 1}, "hint": "达到后让这个会话歇一会儿。0 表示不按次数退让。"},
+  "unanswered_backoff_minutes": {"description": "没人接话时先歇多久，单位分钟", "type": "int", "default": 180,
+    "slider": {"min": 1, "max": 10080, "step": 1}},
+  "daily_limit": {"description": "每天主动发话的总上限", "type": "int", "default": 12,
+    "slider": {"min": 0, "max": 1000, "step": 1}, "hint": "群聊和私聊合计，按 AstrBot 主机日期统计。0 表示不设总次数。发送未确认的尝试也计入。"},
+  "quiet_hours": {"description": "安静时段", "type": "string", "default": "00:00-08:00",
+    "hint": "使用 AstrBot 主机本地时间。留空表示全天可活动，可用逗号添加多个区间，例如 00:00-08:00,12:00-13:00。"},
+  "message_length": {"description": "主动发话正文长度", "type": "int", "default": 220,
+    "slider": {"min": 40, "max": 1200, "step": 10}, "hint": "分享的来源链接会另附在正文后。"},
+  "repeat_window_hours": {"description": "参考近期发言避免重复，单位小时", "type": "int", "default": 24,
+    "slider": {"min": 1, "max": 168, "step": 1}, "hint": "会参考最近 12 次活动，尽量避开相似开场和已经分享过的链接。"},
+  "generation_timeout_seconds": {"description": "一轮琢磨与生成的超时秒数", "type": "int", "default": 60,
+    "slider": {"min": 5, "max": 300, "step": 1}},
+  "web_timeout_seconds": {"description": "联网查找的超时秒数", "type": "int", "default": 15,
+    "slider": {"min": 1, "max": 90, "step": 1}},
+  "send_timeout_seconds": {"description": "等待平台发送结果的超时秒数", "type": "int", "default": 30,
+    "slider": {"min": 3, "max": 120, "step": 1}, "hint": "发送未确认时会保留间隔，避免立即重复发同一条消息。"},
+  "retry_minutes": {"description": "活动失败后多久再试，单位分钟", "type": "int", "default": 10,
+    "slider": {"min": 1, "max": 240, "step": 1}},
+  "check_seconds": {"description": "后台查看空闲状态的间隔秒数", "type": "int", "default": 30,
+    "slider": {"min": 5, "max": 300, "step": 1}}
+}
