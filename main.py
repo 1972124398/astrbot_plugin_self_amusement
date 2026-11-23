@@ -19,7 +19,7 @@ from .runtime import Runtime, compact_history
 from .social import REFLECTION_SYSTEM, parse_reflection
 from .state import LeisureState, StateStore, TargetState, number, quiet_now
 from .web import Browser
-from .interop import CompanionLink, conversation_key, event_kind, human_dialogue
+from .interop import CompanionLink, conversation_key, event_kind, human_dialogue, notice_ignored
 
 
 class SelfAmusement(Star):
@@ -520,8 +520,12 @@ class SelfAmusement(Star):
             label = getattr(getattr(event.message_obj, "group", None), "group_name", "") or event.get_group_id()
         target = self.state.targets.get(origin)
         answered = bool(target and target.unanswered > 0)
-        self.state.engage(origin, time.time(), self.idle_delay(), label=label,
-                          sender_id=event.get_sender_id(), human=not proactive)
+        if proactive:
+            self.state.next_wake = time.time() + self.idle_delay()
+            self.state.revision += 1
+        else:
+            self.state.engage(origin, time.time(), self.idle_delay(), label=label,
+                              sender_id=event.get_sender_id(), human=True)
         if origin in self.state.targets and not proactive:
             temporal = event.get_extra("short_term_mood.time_context")
             history = temporal.get("recent_dialogue", []) if isinstance(temporal, dict) else (request.contexts or [])
@@ -543,6 +547,10 @@ class SelfAmusement(Star):
     @filter.on_llm_response(priority=-90)
     async def observe_response(self, event: AstrMessageEvent, response):
         if event.get_extra("self_amusement") or self.closing:
+            return
+        if notice_ignored(event) or (event_kind(event) != "dialogue" and not getattr(response, "completion_text", "")):
+            self.link.end(event)
+            self.chat_finished(event)
             return
         origin = event.unified_msg_origin
         self.link.end(event, response)
