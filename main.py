@@ -19,7 +19,7 @@ from .runtime import Runtime, compact_history
 from .social import REFLECTION_SYSTEM, parse_reflection
 from .state import LeisureState, StateStore, TargetState, number, quiet_now
 from .web import Browser
-from .interop import CompanionLink, conversation_key, event_kind
+from .interop import CompanionLink, conversation_key, event_kind, human_dialogue
 
 
 class SelfAmusement(Star):
@@ -523,7 +523,9 @@ class SelfAmusement(Star):
         self.state.engage(origin, time.time(), self.idle_delay(), label=label,
                           sender_id=event.get_sender_id(), human=not proactive)
         if origin in self.state.targets and not proactive:
-            self.recent_inputs[origin] = compact_history([*(request.contexts or [])[-7:], {"role": "user", "content": request.prompt or event.get_message_str()}])
+            temporal = event.get_extra("short_term_mood.time_context")
+            history = temporal.get("recent_dialogue", []) if isinstance(temporal, dict) else (request.contexts or [])
+            self.recent_inputs[origin] = compact_history([*human_dialogue(history)[-7:], {"role": "user", "content": request.prompt or event.get_message_str()}])
             if self.social_enabled():
                 event.set_extra("self_amusement_reflection", {
                     "origin": origin, "version": self.state.targets[origin].interaction_version,

@@ -11,7 +11,7 @@ from astrbot.api.platform import AstrBotMessage, MessageMember, MessageType
 from astrbot.api.provider import ProviderRequest
 from astrbot.core.platform.astrbot_message import Group
 from astrbot.core.platform.message_session import MessageSession
-from .interop import CompanionLink
+from .interop import CompanionLink, human_dialogue
 
 
 class LeisureEvent(AstrMessageEvent):
@@ -46,7 +46,7 @@ class ConversationView:
 
 def compact_history(messages: list, limit=8) -> list[dict]:
     result = []
-    for message in messages[-limit:]:
+    for message in human_dialogue(messages)[-limit:]:
         if not isinstance(message, dict) or message.get("role") not in {"user", "assistant"}:
             continue
         content = message.get("content", "")
