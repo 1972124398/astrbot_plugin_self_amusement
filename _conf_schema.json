@@ -9,6 +9,24 @@
     "description": "闲逛和主动说话使用的模型", "type": "string", "default": "", "_special": "select_provider",
     "hint": "留空跟随所选会话的聊天模型。计划、浏览和主动消息都在后台完成。"
   },
+  "reflection_provider_id": {
+    "description": "后台回想相处感受的模型", "type": "string", "default": "", "_special": "select_provider",
+    "hint": "可选独立的小模型回想感受，留空沿用自娱自乐模型。与前台分开 Provider 可减少同一服务的并发竞争。"
+  },
+  "chat_first": {
+    "description": "有人聊天时先陪人，闲下来再自己玩", "type": "bool", "default": true,
+    "hint": "正常聊天开始后，放下正在生成的闲话和后台回想，等聊天暂歇后再继续。已经开始向平台发送的消息会等待发送结果。"
+  },
+  "background_after_chat_seconds": {
+    "description": "聊天暂歇几秒后恢复后台活动", "type": "int", "default": 10,
+    "slider": {"min": 0, "max": 120, "step": 1},
+    "hint": "给正常对话留一点空隙。主动搭话仍需满足原来配置的空闲时间。"
+  },
+  "reflection_merge_seconds": {
+    "description": "聊完后先等几秒，再回想相处感受", "type": "int", "default": 20,
+    "slider": {"min": 0, "max": 180, "step": 1},
+    "hint": "连续聊的几句话先接着聊，暂歇后把最近一段一起回想，可减少频繁的后台模型调用。"
+  },
   "remember_chemistry": {
     "description": "记住和谁相处开心",
     "type": "bool", "default": true,

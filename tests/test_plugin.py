@@ -63,7 +63,7 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
             platform=lambda _: (None, None), view=AsyncMock(return_value=self.view),
             mood=lambda: {"inner_state": "有点闲，想找人聊聊"},
             enabled=AsyncMock(return_value=True),
-            persona=lambda event, request: request.system_prompt or "自然的朋友",
+            reflection_persona=lambda snapshot: snapshot.get("system_prompt", "自然的朋友"),
             draft=AsyncMock(return_value="突然想问，你最近有什么觉得特别好玩的事吗？"),
             deliver=AsyncMock(return_value=True),
         )
@@ -139,7 +139,7 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.plugin.state.sent_today, 0)
 
     async def test_own_recent_outbound_is_available_to_the_normal_reply(self):
-        self.plugin.state.record(self.origin, "chat", "你刚才想起来的小脑洞", time.time(), "sent")
+        self.plugin.record_activity(self.origin, "chat", "你刚才想起来的小脑洞", time.time(), "sent")
         request = ProviderRequest(prompt="哈哈", system_prompt="原人设")
         await self.plugin.observe_request(FakeEvent(), request)
         self.assertEqual(request.prompt, "哈哈")

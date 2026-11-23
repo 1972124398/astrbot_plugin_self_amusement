@@ -50,10 +50,12 @@ def compact_history(messages: list, limit=8) -> list[dict]:
             continue
         content = message.get("content", "")
         if isinstance(content, list):
-            content = "\n".join(str(part.get("text", "")) for part in content
-                                if isinstance(part, dict) and part.get("type") == "text" and not part.get("_no_save"))
-        if isinstance(content, str) and content.strip():
-            result.append({"role": message["role"], "content": content[-1200:]})
+            content = "\n".join(str(part.get("text", ""))[-1200:] for part in content[-16:]
+                    if isinstance(part, dict) and part.get("type") == "text" and not part.get("_no_save"))
+        if isinstance(content, str):
+            content = content[-1200:]
+            if content.strip():
+                result.append({"role": message["role"], "content": content})
     return result
 
 
@@ -61,19 +63,19 @@ class Runtime:
     def __init__(self, context):
         self.context = context
 
-    def persona(self, event, request):
-        persona_id = event.get_extra("_trace_persona_id")
+    def reflection_persona(self, snapshot):
+        persona_id = snapshot.get("persona_id")
         if persona_id == "[%None]":
             return ""
         if persona_id and persona_id != "_chatui_default_":
             persona = self.context.persona_manager.get_persona_v3_by_id(persona_id)
-            if persona:
+            if persona and persona.get("prompt", "") in snapshot.get("system_prompt", ""):
                 return str(persona.get("prompt", ""))
         if persona_id == "_chatui_default_":
             from astrbot.core.astr_main_agent_resources import CHATUI_SPECIAL_DEFAULT_PERSONA_PROMPT
 
             return CHATUI_SPECIAL_DEFAULT_PERSONA_PROMPT
-        return request.system_prompt or ""
+        return snapshot.get("system_prompt", "")
 
     def platform(self, origin):
         session = MessageSession.from_str(origin)

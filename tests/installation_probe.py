@@ -29,8 +29,11 @@ async def main():
     assert plugin.config["targets"] == []
     assert plugin.config.schema["targets"]["_special"] == "umo"
     assert plugin.star_cls.worker is not None
+    previous = plugin.star_cls
+    assert previous.reflection_worker is not None and previous.save_worker is not None
     success, error = await core.plugin_manager.reload(plugin.name)
     assert success, error
+    assert previous.worker.done() and previous.reflection_worker.done() and previous.save_worker.done()
     await core.stop()
     print(json.dumps({"loaded": True, "native_configuration": True, "default_targets": [], "hot_reload": success}))
 

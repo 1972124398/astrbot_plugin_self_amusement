@@ -188,11 +188,29 @@ class LeisureState:
     def reserve(self, origin: str, text: str, now: float):
         self.refresh_day(now)
         target = self.targets[origin]
+        before = {"last_sent": target.last_sent, "last_outbound": self.last_outbound,
+                  "unanswered": target.unanswered, "day": self.day}
         target.last_sent = now
         target.unanswered += 1
         self.last_outbound = now
         self.sent_today += 1
-        self.pending = {"origin": origin, "text": text, "time": now}
+        self.pending = {"origin": origin, "text": text, "time": now, "before": before}
+
+    def cancel_pending(self):
+        pending = self.pending
+        if not pending:
+            return
+        before = pending.get("before", {})
+        target = self.targets.get(pending["origin"])
+        if target and target.last_sent == pending["time"]:
+            target.last_sent = before.get("last_sent", 0)
+        if target and target.last_received <= pending["time"]:
+            target.unanswered = before.get("unanswered", max(0, target.unanswered - 1))
+        if self.last_outbound == pending["time"]:
+            self.last_outbound = before.get("last_outbound", 0)
+        if self.day == before.get("day", self.day):
+            self.sent_today = max(0, self.sent_today - 1)
+        self.pending = None
 
     def record(self, origin: str, action: str, text: str, now: float, status: str):
         self.pending = None

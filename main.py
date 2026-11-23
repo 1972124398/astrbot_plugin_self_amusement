@@ -10,7 +10,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.agent.message import TextPart
 
@@ -36,11 +36,27 @@ class SelfAmusement(Star):
         self.cycle_lock = asyncio.Lock()
         self.save_lock = asyncio.Lock()
         self.wake = asyncio.Event()
+        self.reflection_wake = asyncio.Event()
+        self.save_wake = asyncio.Event()
+        self.preview_wake = asyncio.Event()
         self.worker = None
+        self.reflection_worker = None
+        self.save_worker = None
+        self.activity_task = None
+        self.reflection_task = None
+        self.active_reflection = None
+        self.preview_worker = None
+        self.preview_task = None
+        self.active_turns = {}
+        self.turn_serial = 0
+        self.last_chat_activity = 0
+        self.sending = False
+        self.delivery_attempted = False
         self.closing = False
         self.dirty = False
         self.recent_inputs = {}
         self.reflection_jobs = {}
+        self.outbound_hints = {}
         self.activity = "等待闲下来"
         self.last_error = ""
 
@@ -60,7 +76,10 @@ class SelfAmusement(Star):
         self.state.refresh_targets(self.origins())
         self.state.initialize(time.time(), self.idle_delay())
         await self.persist()
+        self.refresh_outbound_hints()
         self.worker = asyncio.create_task(self.run(), name="self-amusement-leisure")
+        self.reflection_worker = asyncio.create_task(self.run_reflections(), name="self-amusement-reflections")
+        self.save_worker = asyncio.create_task(self.run_saves(), name="self-amusement-save")
 
     async def persist(self):
         async with self.save_lock:
@@ -73,8 +92,113 @@ class SelfAmusement(Star):
                 await writing
                 raise
 
-    def eligible(self, now):
+    def changed(self):
+        self.dirty = True
+        self.save_wake.set()
+
+    def refresh_targets(self):
         self.state.refresh_targets(self.origins())
+        self.recent_inputs = {origin: value for origin, value in self.recent_inputs.items() if origin in self.state.targets}
+        self.reflection_jobs = {origin: value for origin, value in self.reflection_jobs.items() if origin in self.state.targets}
+        self.refresh_outbound_hints()
+
+    def refresh_outbound_hints(self):
+        hints = {}
+        for item in self.state.recent:
+            if item.get("status") == "sent" and item.get("text"):
+                hints.setdefault(item["origin"], []).append(item["text"])
+        self.outbound_hints = {
+            origin: "你在这个会话最近主动说过的话，供接续当前交流：\n" + "\n".join(texts[-3:])
+            for origin, texts in hints.items() if origin in self.state.targets
+        }
+
+    def record_activity(self, origin, action, text, now, status):
+        self.state.record(origin, action, text, now, status)
+        self.refresh_outbound_hints()
+
+    def background_ready(self):
+        if not self.config.get("chat_first", True):
+            return True
+        now = time.monotonic()
+        # An aborted framework request may never emit its completion hook.
+        self.active_turns = {key: started for key, started in self.active_turns.items() if now - started < 600}
+        return not self.active_turns and now - self.last_chat_activity >= self.setting("background_after_chat_seconds", 10, 0, 120)
+
+    def chat_started(self, event):
+        token = event.get_extra("self_amusement_turn")
+        if token is None:
+            self.turn_serial += 1
+            token = self.turn_serial
+            event.set_extra("self_amusement_turn", token)
+        self.active_turns[token] = time.monotonic()
+        self.last_chat_activity = time.monotonic()
+        if self.activity_task and not self.activity_task.done() and not self.sending:
+            self.activity_task.cancel()
+        if self.reflection_task and not self.reflection_task.done():
+            if self.config.get("chat_first", True) or (self.active_reflection or {}).get("origin") == event.unified_msg_origin:
+                self.reflection_task.cancel()
+        if self.preview_task and not self.preview_task.done() and self.config.get("chat_first", True):
+            self.preview_task.cancel()
+
+    def chat_finished(self, event):
+        self.active_turns.pop(event.get_extra("self_amusement_turn"), None)
+        self.last_chat_activity = time.monotonic()
+        self.reflection_wake.set()
+        self.preview_wake.set()
+        self.wake.set()
+
+    async def run_saves(self):
+        while True:
+            await self.save_wake.wait()
+            self.save_wake.clear()
+            await asyncio.sleep(0.2)
+            if self.dirty:
+                try:
+                    await self.persist()
+                except Exception as error:
+                    self.dirty = True
+                    logger.warning("Self-amusement could not save its current state (%s)", type(error).__name__)
+                    await asyncio.sleep(5)
+                    self.save_wake.set()
+
+    async def run_reflections(self):
+        while True:
+            self.reflection_wake.clear()
+            ready = [(origin, job) for origin, job in self.reflection_jobs.items()
+                     if job.get("ready_at", 0) <= time.monotonic()]
+            if not self.background_ready() or not ready:
+                if not self.reflection_jobs:
+                    await self.reflection_wake.wait()
+                    continue
+                deadline = min(job.get("ready_at", 0) for job in self.reflection_jobs.values())
+                if self.config.get("chat_first", True):
+                    deadline = max(deadline, self.last_chat_activity + self.setting("background_after_chat_seconds", 10, 0, 120))
+                delay = 30 if self.active_turns and self.config.get("chat_first", True) else max(0.05, deadline - time.monotonic())
+                try:
+                    await asyncio.wait_for(self.reflection_wake.wait(), timeout=delay)
+                except TimeoutError:
+                    pass
+                continue
+            origin, job = ready[0]
+            self.reflection_jobs.pop(origin)
+            self.active_reflection = job
+            self.reflection_task = asyncio.create_task(self.reflect(job), name="self-amusement-reflect-one")
+            try:
+                await self.reflection_task
+            except asyncio.CancelledError:
+                if self.closing or asyncio.current_task().cancelling():
+                    raise
+                target = self.state.targets.get(origin)
+                if target and target.interaction_version == job["version"] and origin not in self.reflection_jobs:
+                    self.reflection_jobs[origin] = job
+            except Exception as error:
+                logger.warning("Self-amusement reflection worker could not finish this thought (%s)", type(error).__name__)
+            finally:
+                self.reflection_task = None
+                self.active_reflection = None
+
+    def eligible(self, now):
+        self.refresh_targets()
         return self.state.eligible(
             now, global_gap=self.setting("global_gap_minutes", 20, 0, 1440) * 60,
             target_gap=self.setting("target_gap_minutes", 60, 0, 10080) * 60,
@@ -99,7 +223,8 @@ class SelfAmusement(Star):
         if not self.social_enabled() or not target or target.interaction_version != job["version"]:
             return
         payload = {
-            "persona": job["persona"], "recent_dialogue": job["history"],
+            "persona": job.get("persona") if "persona" in job else self.runtime.reflection_persona(job),
+            "recent_dialogue": job["history"],
             "previous_impression": target.impression(),
             "answered_my_initiative": job["answered_my_initiative"],
             "recent_initiatives": [item.get("text", "") for item in self.state.recent
@@ -107,7 +232,7 @@ class SelfAmusement(Star):
         }
         try:
             async with asyncio.timeout(self.setting("reflection_timeout_seconds", 30, 5, 120)):
-                provider_id = str(self.config.get("provider_id", "") or "").strip()
+                provider_id = str(self.config.get("reflection_provider_id", "") or self.config.get("provider_id", "") or "").strip()
                 provider_id = provider_id or await self.context.get_current_chat_provider_id(origin)
                 response = await self.context.llm_generate(
                     chat_provider_id=provider_id, system_prompt=REFLECTION_SYSTEM,
@@ -118,7 +243,7 @@ class SelfAmusement(Star):
                     or target.interaction_version != job["version"]):
                 return
             target.remember(impression, time.time(), self.setting("idle_max_minutes", 45, 1, 1440) * 60)
-            await self.persist()
+            self.changed()
         except Exception as error:
             logger.warning("Self-amusement could not reflect on this conversation (%s)", type(error).__name__)
 
@@ -206,7 +331,7 @@ class SelfAmusement(Star):
 
     async def cycle(self):
         now = time.time()
-        if self.closing or not self.config.get("enabled", True) or now < self.state.next_wake:
+        if self.closing or not self.config.get("enabled", True) or now < self.state.next_wake or not self.background_ready():
             return
         if quiet_now(str(self.config.get("quiet_hours", "00:00-08:00") or ""), datetime.fromtimestamp(now)):
             self.activity = "安静时段，自己待着"
@@ -221,6 +346,7 @@ class SelfAmusement(Star):
         if self.cycle_lock.locked():
             return
         async with self.cycle_lock:
+            self.delivery_attempted = False
             weights = [self.attraction(origin, now) for origin in candidates]
             origin = random.choices(candidates, weights=weights)[0]
             revision = self.state.revision
@@ -235,7 +361,7 @@ class SelfAmusement(Star):
             self.state.next_wake = time.time() + delay
             self.activity = {"wait": "继续发会儿呆", "browse": "逛了一会儿，先记在心里"}.get(plan["action"], "准备开口")
             if not text:
-                self.state.record(origin, plan["action"], "", time.time(), "private")
+                self.record_activity(origin, plan["action"], "", time.time(), "private")
                 await self.persist()
                 return
             current = time.time()
@@ -247,52 +373,64 @@ class SelfAmusement(Star):
             self.state.reserve(origin, text, current)
             await self.persist()
             if revision != self.state.revision or self.closing or origin not in self.origins() or not self.config.get("enabled", True):
-                self.state.pending = None
+                self.state.cancel_pending()
                 await self.persist()
                 return
             self.activity = "发出一点闲话"
-            async with asyncio.timeout(self.setting("send_timeout_seconds", 30, 3, 120)):
-                delivered = await self.runtime.deliver(view, text)
-            self.state.record(origin, plan["action"], text, time.time(), "sent" if delivered else "unconfirmed")
+            self.sending = True
+            self.delivery_attempted = True
+            try:
+                async with asyncio.timeout(self.setting("send_timeout_seconds", 30, 3, 120)):
+                    delivered = await self.runtime.deliver(view, text)
+            finally:
+                self.sending = False
+            self.record_activity(origin, plan["action"], text, time.time(), "sent" if delivered else "unconfirmed")
             self.activity = "刚聊了一句，等一会儿"
             await self.persist()
             self.last_error = ""
 
+    async def background_activity(self):
+        try:
+            await self.cycle()
+        except asyncio.CancelledError:
+            if self.state.pending and not self.delivery_attempted:
+                self.state.cancel_pending()
+                self.changed()
+            if not self.closing:
+                self.activity = "先陪人聊，闲下来再玩"
+            raise
+        except Exception as error:
+            self.last_error = type(error).__name__
+            self.activity = "这次没想好，稍后再试"
+            if self.state.pending:
+                pending = self.state.pending
+                self.record_activity(pending["origin"], "attempt", pending["text"], pending["time"], "unconfirmed")
+            self.state.next_wake = time.time() + self.setting("retry_minutes", 10, 1, 240) * 60
+            self.changed()
+            logger.warning("Self-amusement activity unavailable (%s)", type(error).__name__)
+
     async def run(self):
         while True:
+            self.wake.clear()
             try:
-                if self.dirty:
-                    await self.persist()
-                while self.reflection_jobs:
-                    origin = next(iter(self.reflection_jobs))
-                    await self.reflect(self.reflection_jobs.pop(origin))
-                await self.cycle()
+                self.refresh_targets()
+                preview_pending = self.preview_worker and not self.preview_worker.done()
+                if self.background_ready() and not preview_pending and (self.activity_task is None or self.activity_task.done()):
+                    self.activity_task = asyncio.create_task(self.background_activity(), name="self-amusement-activity")
             except Exception as error:
                 self.last_error = type(error).__name__
-                self.activity = "这次没想好，稍后再试"
-                if self.state.pending:
-                    pending = self.state.pending
-                    self.state.record(pending["origin"], "attempt", pending["text"], pending["time"], "unconfirmed")
-                self.state.next_wake = time.time() + self.setting("retry_minutes", 10, 1, 240) * 60
-                logger.warning("Self-amusement activity unavailable (%s)", type(error).__name__)
-                try:
-                    await self.persist()
-                except Exception:
-                    logger.warning("Self-amusement could not save its current state")
+                logger.warning("Self-amusement background scheduler unavailable (%s)", type(error).__name__)
             try:
                 await asyncio.wait_for(self.wake.wait(), timeout=self.setting("check_seconds", 30, 5, 300))
             except TimeoutError:
                 pass
-            self.wake.clear()
 
     @filter.on_llm_request(priority=-110)
     async def observe_request(self, event: AstrMessageEvent, request):
-        if event.get_extra("self_amusement") or self.closing:
+        if event.get_extra("self_amusement") or self.closing or not self.config.get("enabled", True):
             return
         origin = event.unified_msg_origin
-        self.state.refresh_targets(self.origins())
-        self.recent_inputs = {key: value for key, value in self.recent_inputs.items() if key in self.state.targets}
-        self.reflection_jobs = {key: value for key, value in self.reflection_jobs.items() if key in self.state.targets}
+        self.chat_started(event)
         proactive = str(getattr(event.message_obj, "message_id", "")).startswith("proactive:")
         label = event.get_sender_name()
         if event.get_group_id():
@@ -302,18 +440,19 @@ class SelfAmusement(Star):
         self.state.engage(origin, time.time(), self.idle_delay(), label=label,
                           sender_id=event.get_sender_id(), human=not proactive)
         if origin in self.state.targets and not proactive:
-            self.recent_inputs[origin] = compact_history([*(request.contexts or []), {"role": "user", "content": request.prompt or event.get_message_str()}])
+            self.recent_inputs[origin] = compact_history([*(request.contexts or [])[-7:], {"role": "user", "content": request.prompt or event.get_message_str()}])
             if self.social_enabled():
                 event.set_extra("self_amusement_reflection", {
                     "origin": origin, "version": self.state.targets[origin].interaction_version,
-                    "persona": self.runtime.persona(event, request),
+                    "persona_id": event.get_extra("_trace_persona_id"),
+                    "system_prompt": request.system_prompt or "",
                     "history": list(self.recent_inputs[origin]), "answered_my_initiative": answered,
                 })
-            prior = [item for item in self.state.recent if item.get("origin") == origin and item.get("status") == "sent" and item.get("text")][-3:]
+            prior = self.outbound_hints.get(origin)
             if prior and not event.get_extra("self_amusement_history"):
-                request.extra_user_content_parts.append(TextPart(text="你在这个会话最近主动说过的话，供接续当前交流：\n" + "\n".join(item["text"] for item in prior)).mark_as_temp())
+                request.extra_user_content_parts.append(TextPart(text=prior).mark_as_temp())
                 event.set_extra("self_amusement_history", True)
-        self.dirty = True
+        self.changed()
         self.wake.set()
 
     @filter.on_llm_response(priority=-90)
@@ -321,14 +460,24 @@ class SelfAmusement(Star):
         if event.get_extra("self_amusement") or self.closing:
             return
         origin = event.unified_msg_origin
+        self.chat_finished(event)
         self.state.engage(origin, time.time(), self.idle_delay(), human=False)
         if origin in self.recent_inputs:
             self.recent_inputs[origin] = compact_history([*self.recent_inputs[origin], {"role": "assistant", "content": response.completion_text or ""}])
         job = event.get_extra("self_amusement_reflection")
         if job and self.social_enabled() and response.completion_text:
-            self.reflection_jobs[origin] = {**job, "history": compact_history([*job["history"], {"role": "assistant", "content": response.completion_text}])}
-        self.dirty = True
+            self.reflection_jobs[origin] = {
+                **job, "history": compact_history([*job["history"], {"role": "assistant", "content": response.completion_text}]),
+                "ready_at": time.monotonic() + self.setting("reflection_merge_seconds", 20, 0, 180),
+            }
+            self.reflection_wake.set()
+        self.changed()
         self.wake.set()
+
+    @filter.on_agent_done(priority=-90)
+    async def agent_finished(self, event: AstrMessageEvent, run_context, response):
+        if not event.get_extra("self_amusement") and not self.closing:
+            self.chat_finished(event)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("amuse_status")
@@ -377,7 +526,7 @@ class SelfAmusement(Star):
         self.config.save_config()
         self.state.refresh_targets(self.origins())
         self.state.engage(event.unified_msg_origin, time.time(), self.idle_delay(), label=event.get_sender_name(), sender_id=event.get_sender_id())
-        self.dirty = True
+        self.changed()
         self.wake.set()
         yield event.plain_result("已把当前会话加入自娱自乐，和其他群聊、私聊共用一套配置。")
 
@@ -388,29 +537,72 @@ class SelfAmusement(Star):
         self.config.save_config()
         self.state.refresh_targets(self.origins())
         self.state.revision += 1
-        self.dirty = True
+        self.changed()
         self.wake.set()
         yield event.plain_result("已将当前会话移出自娱自乐。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("amuse_preview")
     async def preview(self, event: AstrMessageEvent):
-        if self.cycle_lock.locked():
-            yield event.plain_result("正在琢磨另一点事情，过一会儿再预览。")
+        if self.preview_worker and not self.preview_worker.done():
+            yield event.plain_result("已经有一份自娱预览在后台琢磨，想好后会回到发起它的会话。")
             return
-        async with self.cycle_lock:
+        self.runtime.platform(event.unified_msg_origin)
+        if self.activity_task and not self.activity_task.done() and not self.sending:
+            self.activity_task.cancel()
+        self.preview_worker = asyncio.create_task(self.run_preview(event.unified_msg_origin), name="self-amusement-preview")
+        yield event.plain_result("自娱预览已在后台琢磨，想好后会在这里告诉你。可以先继续聊。")
+
+    async def preview_ready(self):
+        while not self.background_ready():
+            self.preview_wake.clear()
             try:
-                async with asyncio.timeout(self.setting("generation_timeout_seconds", 60, 5, 300)):
-                    _, plan, text, sources = await self.prepare(event.unified_msg_origin)
-                yield event.plain_result(f"自娱预览 · {plan['action']}\n{text or plan['private_note'] or '这会儿更想自己待一会儿。'}")
-            finally:
-                self.activity = "等待闲下来"
+                await asyncio.wait_for(self.preview_wake.wait(), timeout=1)
+            except TimeoutError:
+                pass
+
+    async def prepare_preview(self, origin):
+        async with self.cycle_lock:
+            async with asyncio.timeout(self.setting("generation_timeout_seconds", 60, 5, 300)):
+                return await self.prepare(origin)
+
+    async def run_preview(self, origin):
+        try:
+            while True:
+                await self.preview_ready()
+                self.preview_task = asyncio.create_task(self.prepare_preview(origin), name="self-amusement-preview-draft")
+                try:
+                    view, plan, text, _ = await self.preview_task
+                    break
+                except asyncio.CancelledError:
+                    if self.closing or asyncio.current_task().cancelling():
+                        raise
+                finally:
+                    self.preview_task = None
+            await self.preview_ready()
+            message = f"自娱预览 · {plan['action']}\n{text or plan['private_note'] or '这会儿更想自己待一会儿。'}"
+            async with asyncio.timeout(self.setting("send_timeout_seconds", 30, 3, 120)):
+                delivered = await self.runtime.deliver(view, message)
+            if not delivered:
+                self.last_error = "预览发送未确认"
+        except Exception as error:
+            self.last_error = type(error).__name__
+            logger.warning("Self-amusement preview unavailable (%s)", type(error).__name__)
+            try:
+                async with asyncio.timeout(self.setting("send_timeout_seconds", 30, 3, 120)):
+                    await self.context.send_message(origin, MessageChain().message("这次自娱预览没想好，可以稍后再试，或用 /amuse_status 查看状态。"))
+            except Exception:
+                logger.warning("Self-amusement could not report its preview result")
+        finally:
+            self.activity = "等待闲下来"
 
     async def terminate(self):
         if self.closing:
             return
         self.closing = True
-        if self.worker:
-            self.worker.cancel()
-            await asyncio.gather(self.worker, return_exceptions=True)
+        tasks = [task for task in (self.worker, self.reflection_worker, self.save_worker, self.activity_task,
+                                  self.reflection_task, self.preview_worker, self.preview_task) if task is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await self.persist()
