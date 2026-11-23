@@ -19,19 +19,21 @@ from .runtime import Runtime, compact_history
 from .social import REFLECTION_SYSTEM, parse_reflection
 from .state import LeisureState, StateStore, TargetState, number, quiet_now
 from .web import Browser
+from .interop import CompanionLink, conversation_key, event_kind
 
 
 class SelfAmusement(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        self.link = CompanionLink(context, "self_amusement", config)
         self.store = StateStore(Path(StarTools.get_data_dir("astrbot_plugin_self_amusement")))
         try:
             self.state = self.store.load()
         except (ValueError, TypeError, AttributeError):
             logger.warning("Self-amusement could not read its previous state, starting with a fresh idle period")
             self.state = LeisureState()
-        self.runtime = Runtime(context)
+        self.runtime = Runtime(context, config)
         self.browser = Browser(context)
         self.cycle_lock = asyncio.Lock()
         self.save_lock = asyncio.Lock()
@@ -71,6 +73,54 @@ class SelfAmusement(Star):
         lower = self.setting("idle_min_minutes", 15, 1, 1440)
         upper = max(lower, self.setting("idle_max_minutes", 45, 1, 1440))
         return random.uniform(lower, upper) * 60
+
+    def companion_snapshot(self, origin=""):
+        if not origin:
+            return {}
+        target = next((target for umo, target in self.state.targets.items() if conversation_key(umo) == conversation_key(origin)), None)
+        if not target:
+            return {}
+        limit = int(self.setting("max_unanswered", 2, 0, 20))
+        return {"impression": target.impression() if self.social_enabled() else {},
+                "attraction": target.attraction(str(self.config.get("preference_strength", "natural"))) if self.social_enabled() else 1.0,
+                "wants_space": target.wants_space or bool(limit and target.unanswered >= limit) or time.time() < target.available_after,
+                "recent_own_messages": [row["text"] for row in self.state.recent
+                    if conversation_key(row["origin"]) == conversation_key(origin) and row.get("status") == "sent"][-3:]}
+
+    def companion_observe(self, packet):
+        if self.closing or not self.link.enabled:
+            return
+        origin = next((umo for umo in self.state.targets if conversation_key(umo) == conversation_key(packet["origin"])), "")
+        kind, data = packet["kind"], packet["data"]
+        if kind == "human_activity":
+            self.state.engage(origin, time.time(), self.idle_delay(), human=True)
+            self.last_chat_activity = time.monotonic()
+            if self.activity_task and not self.activity_task.done() and not self.sending:
+                self.activity_task.cancel()
+        elif origin and kind == "initiative":
+            target = self.state.targets[origin]
+            target.last_sent = time.time()
+            target.unanswered += 1
+            self.state.last_outbound = time.time()
+            self.state.next_wake = time.time() + self.idle_delay()
+        elif origin and kind == "game_turn" and not data.get("handled_by_chat"):
+            self.state.engage(origin, time.time(), self.idle_delay(), human=False)
+            history = compact_history([
+                *self.recent_inputs.get(origin, []),
+                {"role": "user", "content": data.get("human_text") or "（一起玩游戏）"},
+                {"role": "assistant", "content": data.get("reply", "")},
+            ])
+            self.recent_inputs[origin] = history
+            if self.social_enabled():
+                self.reflection_jobs[origin] = {
+                    "origin": origin, "version": self.state.targets[origin].interaction_version,
+                    "persona": data.get("persona", ""), "history": history,
+                    "answered_my_initiative": True,
+                    "ready_at": time.monotonic() + self.setting("reflection_merge_seconds", 20, 0, 180),
+                }
+                self.reflection_wake.set()
+        self.changed()
+        self.wake.set()
 
     async def initialize(self):
         self.state.refresh_targets(self.origins())
@@ -266,9 +316,12 @@ class SelfAmusement(Star):
         if not self.config.get("browse_enabled", True):
             actions = [value for value in actions if value not in {"share", "browse"}]
         actions = list(dict.fromkeys([*actions, "wait"]))
+        play = self.link.snapshot("play_together", origin)
+        if self.config.get("interop_play", True) and play.get("can_invite"):
+            actions.append("play")
         recent = [item for item in self.state.recent if item.get("origin") == origin][-5:]
         payload = {
-            "persona": view.persona, "mood": self.runtime.mood(),
+            "persona": view.persona, "mood": self.link.snapshot("short_term_mood", origin),
             "recent_dialogue": view.history, "recent_actions": recent,
             "leisure_thought": self.state.thought, "interests": self.config.get("interests", []),
             "idle_minutes": round(max(0, time.time() - self.state.last_engaged) / 60, 1),
@@ -276,6 +329,7 @@ class SelfAmusement(Star):
             "how_it_feels_with_you": target.impression() if self.social_enabled() else {},
             "current_time": datetime.now().astimezone().isoformat(timespec="minutes"),
             "preferences": str(self.config.get("behavior_preferences", "") or "")[:2000],
+            "companion": self.link.context_for(origin),
         }
         self.activity = "琢磨做点什么"
         response = await self.context.llm_generate(
@@ -308,7 +362,7 @@ class SelfAmusement(Star):
                 sources["results"] = [entry for entry in sources["results"] if entry["url"] not in used][:1]
                 if not sources["results"]:
                     return view, plan, "", sources
-        if plan["action"] in {"wait", "browse"}:
+        if plan["action"] in {"wait", "browse", "play"}:
             return view, plan, "", sources
         self.activity = "想好怎么开口"
         material = {"action": plan["action"], "idea": plan["idea"], "sources": sources,
@@ -330,6 +384,15 @@ class SelfAmusement(Star):
         return False
 
     async def cycle(self):
+        token = self.link.claim_idle()
+        if token is None:
+            return
+        try:
+            return await self._cycle(token)
+        finally:
+            self.link.release_idle(token)
+
+    async def _cycle(self, idle_token):
         now = time.time()
         if self.closing or not self.config.get("enabled", True) or now < self.state.next_wake or not self.background_ready():
             return
@@ -354,12 +417,27 @@ class SelfAmusement(Star):
             await self.persist()
             async with asyncio.timeout(self.setting("generation_timeout_seconds", 60, 5, 300)):
                 view, plan, text, sources = await self.prepare(origin)
-            if self.closing or revision != self.state.revision or not self.config.get("enabled", True):
+            if (self.closing or revision != self.state.revision or not self.config.get("enabled", True)
+                    or not self.link.idle_current(idle_token)):
                 return
             self.state.thought = plan["private_note"]
+            if sources.get("results") and plan["action"] in {"browse", "share"}:
+                self.link.publish("leisure_experience", origin, {
+                    "action": plan["action"], "idea": plan["idea"], "private_note": plan["private_note"],
+                    "materials": [{"title": row["title"], "snippet": row.get("snippet", "")[:500]} for row in sources["results"][:3]],
+                    "persona": view.persona,
+                })
             delay = min(plan["wait_minutes"] * 60, self.setting("idle_max_minutes", 45, 1, 1440) * 60)
             self.state.next_wake = time.time() + delay
             self.activity = {"wait": "继续发会儿呆", "browse": "逛了一会儿，先记在心里"}.get(plan["action"], "准备开口")
+            if plan["action"] == "play":
+                play = self.link.peer("play_together", origin)
+                invite = getattr(play, "invite_from_companion", None)
+                invited = await invite(origin, plan["idea"], idle_token) if invite else False
+                self.activity = "想找对方玩一小局" if invited else "这会儿先把玩心留着"
+                self.record_activity(origin, "play", "", time.time(), "private")
+                self.changed()
+                return
             if not text:
                 self.record_activity(origin, plan["action"], "", time.time(), "private")
                 await self.persist()
@@ -372,7 +450,8 @@ class SelfAmusement(Star):
                 return
             self.state.reserve(origin, text, current)
             await self.persist()
-            if revision != self.state.revision or self.closing or origin not in self.origins() or not self.config.get("enabled", True):
+            if (revision != self.state.revision or self.closing or origin not in self.origins()
+                    or not self.config.get("enabled", True) or not self.link.idle_current(idle_token)):
                 self.state.cancel_pending()
                 await self.persist()
                 return
@@ -385,6 +464,8 @@ class SelfAmusement(Star):
             finally:
                 self.sending = False
             self.record_activity(origin, plan["action"], text, time.time(), "sent" if delivered else "unconfirmed")
+            if delivered:
+                self.link.sent(origin, text)
             self.activity = "刚聊了一句，等一会儿"
             await self.persist()
             self.last_error = ""
@@ -430,8 +511,10 @@ class SelfAmusement(Star):
         if event.get_extra("self_amusement") or self.closing or not self.config.get("enabled", True):
             return
         origin = event.unified_msg_origin
+        self.link.begin(event)
+        self.link.inject(event, request)
         self.chat_started(event)
-        proactive = str(getattr(event.message_obj, "message_id", "")).startswith("proactive:")
+        proactive = event_kind(event) != "dialogue"
         label = event.get_sender_name()
         if event.get_group_id():
             label = getattr(getattr(event.message_obj, "group", None), "group_name", "") or event.get_group_id()
@@ -460,6 +543,9 @@ class SelfAmusement(Star):
         if event.get_extra("self_amusement") or self.closing:
             return
         origin = event.unified_msg_origin
+        self.link.end(event, response)
+        if getattr(response, "tools_call_args", None):
+            return
         self.chat_finished(event)
         self.state.engage(origin, time.time(), self.idle_delay(), human=False)
         if origin in self.recent_inputs:
@@ -476,6 +562,7 @@ class SelfAmusement(Star):
 
     @filter.on_agent_done(priority=-90)
     async def agent_finished(self, event: AstrMessageEvent, run_context, response):
+        self.link.end(event)
         if not event.get_extra("self_amusement") and not self.closing:
             self.chat_finished(event)
 
@@ -600,6 +687,7 @@ class SelfAmusement(Star):
         if self.closing:
             return
         self.closing = True
+        self.link.close()
         tasks = [task for task in (self.worker, self.reflection_worker, self.save_worker, self.activity_task,
                                   self.reflection_task, self.preview_worker, self.preview_task) if task is not None]
         for task in tasks:

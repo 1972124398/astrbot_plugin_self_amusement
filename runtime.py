@@ -11,6 +11,7 @@ from astrbot.api.platform import AstrBotMessage, MessageMember, MessageType
 from astrbot.api.provider import ProviderRequest
 from astrbot.core.platform.astrbot_message import Group
 from astrbot.core.platform.message_session import MessageSession
+from .interop import CompanionLink
 
 
 class LeisureEvent(AstrMessageEvent):
@@ -60,8 +61,9 @@ def compact_history(messages: list, limit=8) -> list[dict]:
 
 
 class Runtime:
-    def __init__(self, context):
+    def __init__(self, context, config=None):
         self.context = context
+        self.link = CompanionLink(context, "self_amusement", config)
 
     def reflection_persona(self, snapshot):
         persona_id = snapshot.get("persona_id")
@@ -126,19 +128,15 @@ class Runtime:
         return ConversationView(origin, event, prompt, persona_id, history, conversation, provider_id)
 
     def mood(self):
-        star = self.context.get_registered_star("astrbot_plugin_short_term_mood")
-        if star and star.activated and star.star_cls and star.star_cls.config.get("enabled", True):
-            state = star.star_cls.read_state()
-            return {"levels": dict(state.levels), "inner_state": state.inner_state, "response_tendency": state.response_tendency}
-        return {}
+        return self.link.snapshot("short_term_mood")
 
     async def draft(self, view, prompt, system):
         request = ProviderRequest(prompt=prompt, system_prompt=view.persona + "\n\n" + system,
                                   contexts=list(view.history), conversation=view.conversation)
-        star = self.context.get_registered_star("astrbot_plugin_short_term_mood")
-        allowed = self.context.get_config(umo=view.origin).get("plugin_set", ["*"])
-        if star and star.activated and star.star_cls and ("*" in allowed or star.name in allowed or star.plugin_id in allowed):
-            await star.star_cls.apply_mood(view.event, request)
+        star = self.link.peer("short_term_mood", view.origin)
+        if star:
+            await star.apply_mood(view.event, request)
+        self.link.inject(view.event, request)
         response = await self.context.llm_generate(
             chat_provider_id=view.provider_id, prompt=request.prompt, system_prompt=request.system_prompt,
             contexts=request.contexts, extra_user_content_parts=request.extra_user_content_parts,

@@ -14,7 +14,6 @@ SDK_AVAILABLE = importlib.util.find_spec("astrbot") is not None
 if SDK_AVAILABLE:
     from astrbot.api.provider import ProviderRequest
     from astrbot_plugin_self_amusement.main import SelfAmusement
-    from astrbot_plugin_self_amusement.state import TargetState
 
 
 class FakeEvent:

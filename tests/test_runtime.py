@@ -10,9 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 SDK_AVAILABLE = importlib.util.find_spec("astrbot") is not None
 
 if SDK_AVAILABLE:
-    from astrbot.core.platform.message_session import MessageSession
     from astrbot.core.platform.platform_metadata import PlatformMetadata
-    from astrbot_plugin_self_amusement.runtime import LeisureEvent, Runtime
+    from astrbot_plugin_self_amusement.runtime import Runtime
     from astrbot_plugin_self_amusement.state import TargetState
 
 
