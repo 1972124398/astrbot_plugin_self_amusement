@@ -14,7 +14,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.agent.message import TextPart
 
-from .prompts import MESSAGE_SYSTEM, PLAN_SYSTEM, finish_text, parse_plan
+from .prompts import MESSAGE_SYSTEM, PLAN_SYSTEM, finish_text, parse_plan, DEFAULT_ACTIVITIES
 from .runtime import Runtime, compact_history
 from .social import REFLECTION_SYSTEM, parse_reflection
 from .state import LeisureState, StateStore, TargetState, number, quiet_now
@@ -311,14 +311,30 @@ class SelfAmusement(Star):
         view = await self.runtime.view(origin, target, str(self.config.get("provider_id", "") or "").strip())
         if origin in self.recent_inputs:
             view.history = list(self.recent_inputs[origin])
-        actions = [value for value in self.config.get("activities", ["chat", "mutter", "share", "browse", "wait"])
-                   if value in {"chat", "mutter", "share", "browse", "wait"}]
+        configured = self.config.get("activities", DEFAULT_ACTIVITIES)
+        actions = [value for value in configured if value in {"chat", "mutter", "share", "browse", "wait"}]
         if not self.config.get("browse_enabled", True):
             actions = [value for value in actions if value not in {"share", "browse"}]
         actions = list(dict.fromkeys([*actions, "wait"]))
         play = self.link.snapshot("play_together", origin)
         if self.config.get("interop_play", True) and play.get("can_invite"):
             actions.append("play")
+        codex = self.link.snapshot("codex_bridge", origin) if "codex" in configured else {}
+        result = codex.get("leisure_result")
+        if result:
+            self.activity = "看看刚做好的小东西，想想怎么分享"
+            plan = {"action": "codex_result", "idea": "闲时动手的结果", "query": "",
+                    "private_note": self.state.thought, "wait_minutes": 20}
+            material = {"action": "codex_result", "codex_result": result,
+                        "current_time": datetime.now().astimezone().isoformat(timespec="minutes"),
+                        "preferences": str(self.config.get("behavior_preferences", "") or "")[:2000],
+                        "max_characters": int(self.setting("message_length", 220, 40, 1200))}
+            text = await self.runtime.draft(view, json.dumps(material, ensure_ascii=False), MESSAGE_SYSTEM)
+            return view, plan, finish_text(text, int(self.setting("message_length", 220, 40, 1200))), {
+                "mode": "codex", "results": [], "codex_job_id": result["id"]}
+        if (codex.get("can_start_leisure")
+                and random.random() < self.setting("codex_chance_percent", 5, 0, 100) / 100):
+            actions.append("codex")
         recent = [item for item in self.state.recent if item.get("origin") == origin][-5:]
         payload = {
             "persona": view.persona, "mood": self.link.snapshot("short_term_mood", origin),
@@ -362,7 +378,7 @@ class SelfAmusement(Star):
                 sources["results"] = [entry for entry in sources["results"] if entry["url"] not in used][:1]
                 if not sources["results"]:
                     return view, plan, "", sources
-        if plan["action"] in {"wait", "browse", "play"}:
+        if plan["action"] in {"wait", "browse", "play", "codex"}:
             return view, plan, "", sources
         self.activity = "想好怎么开口"
         material = {"action": plan["action"], "idea": plan["idea"], "sources": sources,
@@ -374,6 +390,16 @@ class SelfAmusement(Star):
         source = sources["results"][0]["url"] if plan["action"] == "share" and sources["results"] else ""
         text = finish_text(text, int(self.setting("message_length", 220, 40, 1200)), source)
         return view, plan, text, sources
+
+    def finish_codex_result(self, origin, sources, status):
+        job_id = sources.get("codex_job_id")
+        if job_id:
+            peer = self.link.peer("codex_bridge", origin)
+            finish = getattr(peer, "finish_leisure_from_companion", None)
+            if finish:
+                return finish(origin, job_id, status)
+            return False
+        return True
 
     def repetitive(self, origin, text, now):
         since = now - self.setting("repeat_window_hours", 24, 1, 168) * 3600
@@ -430,6 +456,21 @@ class SelfAmusement(Star):
             delay = min(plan["wait_minutes"] * 60, self.setting("idle_max_minutes", 45, 1, 1440) * 60)
             self.state.next_wake = time.time() + delay
             self.activity = {"wait": "继续发会儿呆", "browse": "逛了一会儿，先记在心里"}.get(plan["action"], "准备开口")
+            if plan["action"] == "codex":
+                peer = self.link.peer("codex_bridge", origin)
+                start = getattr(peer, "start_leisure_from_companion", None)
+                receipt = None
+                if (start and origin in self.eligible(time.time()) and self.permitted(origin)
+                        and await self.runtime.enabled(origin) and self.link.idle_current(idle_token)):
+                    receipt = start(origin, plan["idea"], {
+                        "persona": view.persona[:3000], "recent_dialogue": view.history,
+                        "interests": self.config.get("interests", []),
+                        "mood": self.link.snapshot("short_term_mood", origin),
+                    }, idle_token)
+                self.activity = "悄悄动手做点小东西，做好再来" if receipt else "先把这个小念头留着"
+                self.record_activity(origin, "codex", plan["idea"], time.time(), "private")
+                await self.persist()
+                return
             if plan["action"] == "play":
                 play = self.link.peer("play_together", origin)
                 invite = getattr(play, "invite_from_companion", None)
@@ -439,6 +480,7 @@ class SelfAmusement(Star):
                 self.changed()
                 return
             if not text:
+                self.finish_codex_result(origin, sources, "private")
                 self.record_activity(origin, plan["action"], "", time.time(), "private")
                 await self.persist()
                 return
@@ -456,13 +498,19 @@ class SelfAmusement(Star):
                 await self.persist()
                 return
             self.activity = "发出一点闲话"
+            if not self.finish_codex_result(origin, sources, "sending"):
+                self.state.cancel_pending()
+                await self.persist()
+                return
             self.sending = True
             self.delivery_attempted = True
+            delivered = False
             try:
                 async with asyncio.timeout(self.setting("send_timeout_seconds", 30, 3, 120)):
                     delivered = await self.runtime.deliver(view, text)
             finally:
                 self.sending = False
+                self.finish_codex_result(origin, sources, "sent" if delivered else "unconfirmed")
             self.record_activity(origin, plan["action"], text, time.time(), "sent" if delivered else "unconfirmed")
             if delivered:
                 self.link.sent(origin, text)

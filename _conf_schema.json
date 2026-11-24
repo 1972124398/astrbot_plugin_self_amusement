@@ -119,6 +119,7 @@
       "mutter",
       "browse",
       "share",
+      "codex",
       "wait"
     ],
     "options": [
@@ -126,6 +127,7 @@
       "mutter",
       "browse",
       "share",
+      "codex",
       "wait"
     ],
     "labels": [
@@ -133,9 +135,17 @@
       "碎碎念或自言自语",
       "自己上网逛逛",
       "看见有趣内容再分享",
+      "偶尔借 Codex 动手做点小东西",
       "发呆或继续待着"
     ],
-    "hint": "角色结合人设、心境和当前会话自己选择。等待始终可选。"
+    "hint": "角色结合人设、心境和当前会话自己选择。Codex 需要同时启用 Codex Bridge，低概率开工，成果回来后再自然分享；等待始终可选。"
+  },
+  "codex_chance_percent": {
+    "description": "每轮闲念中想到用 Codex 动手的概率（%）",
+    "type": "int",
+    "default": 5,
+    "slider": {"min": 0, "max": 100, "step": 1},
+    "hint": "默认只有 5% 的空闲计划会获得 codex 选项，模型仍可以选择别的事，所以实际开工更少。0 关闭新开工；已完成的成果仍可分享。Bridge 另有冷却和每日上限。"
   },
   "interests": {
     "description": "闲下来会惦记的小兴趣",
