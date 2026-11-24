@@ -356,5 +356,11 @@
     "type": "bool",
     "default": true,
     "hint": "安装并启用陪它玩时，模型可以把这次闲念变成小游戏邀请。目标也需要在陪它玩的主动邀玩列表中。"
+  },
+  "link_daily_routine": {
+    "description": "联动日常调查",
+    "type": "bool",
+    "default": true,
+    "hint": "参考个人作息，工作时减少主动打扰、睡眠时暂停主动联系；不影响对方主动聊天。"
   }
 }

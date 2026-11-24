@@ -164,6 +164,18 @@ class CompanionLink:
                 result[role] = value
         return result
 
+    def routine_allows_initiative(self, origin):
+        """Apply optional personal timing only to autonomous activity."""
+        if not self.enabled or not self.config.get("link_daily_routine", True):
+            return True
+        try:
+            star = self.context.get_registered_star("astrbot_plugin_daily_routine")
+            if not star or not star.activated or not star.star_cls:
+                return True
+            return star.star_cls.companion_allow_initiative(origin, self.role)
+        except Exception:
+            return True
+
     def inject(self, event, request):
         annotate_task_source(event, request)
         existing = getattr(request, "extra_user_content_parts", None) or []

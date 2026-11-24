@@ -427,7 +427,8 @@ class SelfAmusement(Star):
             return
         candidates = []
         for origin in self.eligible(now):
-            if self.permitted(origin) and await self.runtime.enabled(origin):
+            if (self.permitted(origin) and self.link.routine_allows_initiative(origin)
+                    and await self.runtime.enabled(origin)):
                 candidates.append(origin)
         if not candidates:
             self.activity = "暂时没有适合搭话的会话"
