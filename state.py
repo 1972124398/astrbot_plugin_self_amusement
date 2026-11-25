@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -44,8 +45,18 @@ class TargetState:
     impressions: list[dict] = field(default_factory=list)
     shared_interests: list[str] = field(default_factory=list)
     next_topic: str = ""
+    thought: str = ""
+    thought_persona: str = ""
     wants_space: bool = False
     available_after: float = 0
+
+    def thought_for(self, persona: str) -> str:
+        key = hashlib.sha256(persona.encode()).hexdigest()
+        return self.thought if self.thought_persona == key else ""
+
+    def remember_thought(self, thought: str, persona: str):
+        self.thought = thought[:300]
+        self.thought_persona = hashlib.sha256(persona.encode()).hexdigest()
 
     def remember(self, impression: dict, now: float, busy_delay: float):
         self.impressions.append({key: impression[key] for key in ("feeling", "desire", "contact", "note")})
@@ -89,6 +100,8 @@ class TargetState:
         self.impressions.clear()
         self.shared_interests.clear()
         self.next_topic = ""
+        self.thought = ""
+        self.thought_persona = ""
         self.wants_space = False
         self.available_after = 0
         self.unanswered = 0
@@ -103,7 +116,6 @@ class LeisureState:
     revision: int = 0
     day: str = ""
     sent_today: int = 0
-    thought: str = ""
     recent: list[dict] = field(default_factory=list)
     targets: dict[str, TargetState] = field(default_factory=dict)
     pending: dict | None = None
@@ -117,9 +129,12 @@ class LeisureState:
             revision=int(number(data.get("revision"), 0, 0, 1e12)),
             day=str(data.get("day", "")),
             sent_today=int(number(data.get("sent_today"), 0, 0, 1e6)),
-            thought=str(data.get("thought", ""))[:300],
-            recent=[item for item in data.get("recent", [])[-12:] if isinstance(item, dict)],
-            pending=data.get("pending") if isinstance(data.get("pending"), dict) else None,
+            recent=[
+                item for item in data.get("recent", [])[-12:] if isinstance(item, dict)
+            ],
+            pending=data.get("pending")
+            if isinstance(data.get("pending"), dict)
+            else None,
         )
         for origin, target in data.get("targets", {}).items():
             if isinstance(target, dict):
@@ -133,6 +148,8 @@ class LeisureState:
                     impressions=[item for item in target.get("impressions", [])[-6:] if isinstance(item, dict)],
                     shared_interests=[str(item)[:60] for item in target.get("shared_interests", [])[:6]],
                     next_topic=str(target.get("next_topic", ""))[:180],
+                    thought=str(target.get("thought", ""))[:300],
+                    thought_persona=str(target.get("thought_persona", ""))[:64],
                     wants_space=target.get("wants_space") is True,
                     available_after=number(target.get("available_after"), 0, 0, 1e12),
                 )

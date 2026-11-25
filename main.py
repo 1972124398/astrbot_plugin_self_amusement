@@ -323,26 +323,54 @@ class SelfAmusement(Star):
         result = codex.get("leisure_result")
         if result:
             self.activity = "看看刚做好的小东西，想想怎么分享"
-            plan = {"action": "codex_result", "idea": "闲时动手的结果", "query": "",
-                    "private_note": self.state.thought, "wait_minutes": 20}
-            material = {"action": "codex_result", "codex_result": result,
-                        "current_time": datetime.now().astimezone().isoformat(timespec="minutes"),
-                        "preferences": str(self.config.get("behavior_preferences", "") or "")[:2000],
-                        "max_characters": int(self.setting("message_length", 220, 40, 1200))}
-            text = await self.runtime.draft(view, json.dumps(material, ensure_ascii=False), MESSAGE_SYSTEM)
-            return view, plan, finish_text(text, int(self.setting("message_length", 220, 40, 1200))), {
-                "mode": "codex", "results": [], "codex_job_id": result["id"]}
-        if (codex.get("can_start_leisure")
-                and random.random() < self.setting("codex_chance_percent", 5, 0, 100) / 100):
+            plan = {
+                "action": "codex_result",
+                "idea": "闲时动手的结果",
+                "query": "",
+                "private_note": target.thought_for(view.persona),
+                "wait_minutes": 20,
+            }
+            material = {
+                "action": "codex_result",
+                "codex_result": result,
+                "current_time": datetime.now()
+                .astimezone()
+                .isoformat(timespec="minutes"),
+                "preferences": str(self.config.get("behavior_preferences", "") or "")[
+                    :2000
+                ],
+                "max_characters": int(self.setting("message_length", 220, 40, 1200)),
+            }
+            text = await self.runtime.draft(
+                view, json.dumps(material, ensure_ascii=False), MESSAGE_SYSTEM
+            )
+            return (
+                view,
+                plan,
+                finish_text(text, int(self.setting("message_length", 220, 40, 1200))),
+                {"mode": "codex", "results": [], "codex_job_id": result["id"]},
+            )
+        if (
+            codex.get("can_start_leisure")
+            and random.random() < self.setting("codex_chance_percent", 5, 0, 100) / 100
+        ):
             actions.append("codex")
         recent = [item for item in self.state.recent if item.get("origin") == origin][-5:]
         payload = {
-            "persona": view.persona, "mood": self.link.snapshot("short_term_mood", origin),
-            "recent_dialogue": view.history, "recent_actions": recent,
-            "leisure_thought": self.state.thought, "interests": self.config.get("interests", []),
-            "idle_minutes": round(max(0, time.time() - self.state.last_engaged) / 60, 1),
-            "unanswered": target.unanswered, "allowed_actions": actions,
-            "how_it_feels_with_you": target.impression() if self.social_enabled() else {},
+            "persona": view.persona,
+            "mood": self.link.snapshot("short_term_mood", origin),
+            "recent_dialogue": view.history,
+            "recent_actions": recent,
+            "leisure_thought": target.thought_for(view.persona),
+            "interests": self.config.get("interests", []),
+            "idle_minutes": round(
+                max(0, time.time() - self.state.last_engaged) / 60, 1
+            ),
+            "unanswered": target.unanswered,
+            "allowed_actions": actions,
+            "how_it_feels_with_you": target.impression()
+            if self.social_enabled()
+            else {},
             "current_time": datetime.now().astimezone().isoformat(timespec="minutes"),
             "preferences": str(self.config.get("behavior_preferences", "") or "")[:2000],
             "companion": self.link.context_for(origin),
@@ -447,7 +475,9 @@ class SelfAmusement(Star):
             if (self.closing or revision != self.state.revision or not self.config.get("enabled", True)
                     or not self.link.idle_current(idle_token)):
                 return
-            self.state.thought = plan["private_note"]
+            self.state.targets[origin].remember_thought(
+                plan["private_note"], view.persona
+            )
             if sources.get("results") and plan["action"] in {"browse", "share"}:
                 self.link.publish("leisure_experience", origin, {
                     "action": plan["action"], "idea": plan["idea"], "private_note": plan["private_note"],
@@ -635,9 +665,11 @@ class SelfAmusement(Star):
         for origin in favorites[:3]:
             target = self.state.targets[origin]
             feelings.append(f"{target.label or origin}　{target.social_description()}")
-        yield event.plain_result(f"自娱自乐　{self.activity}\n约 {delay} 分钟后再看看\n闲念　{self.state.thought or '还没想好玩什么'}"
-                                 + ("\n\n最近相处的感觉\n" + "\n".join(feelings) if feelings else "")
-                                 + (f"\n最近异常　{self.last_error}" if self.last_error else ""))
+        yield event.plain_result(
+            f"自娱自乐　{self.activity}\n约 {delay} 分钟后再看看"
+            + ("\n\n最近相处的感觉\n" + "\n".join(feelings) if feelings else "")
+            + (f"\n最近异常　{self.last_error}" if self.last_error else "")
+        )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("amuse_social")

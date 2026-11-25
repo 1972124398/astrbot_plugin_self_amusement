@@ -102,7 +102,10 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.cycle()
         self.plugin.browser.search.assert_awaited_once()
         self.plugin.runtime.deliver.assert_not_awaited()
-        self.assertIn("一则有趣内容", self.plugin.state.thought)
+        self.assertIn(
+            "一则有趣内容",
+            self.plugin.state.targets[self.origin].thought_for(self.view.persona),
+        )
 
     async def test_share_uses_actual_source_and_unavailable_web_sends_nothing(self):
         self.plan["action"] = "share"
