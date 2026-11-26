@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,23 @@ from astrbot_plugin_self_amusement.web import parse_feed
 
 
 class StateTests(unittest.TestCase):
+    def test_empty_model_topic_drops_previous_unanswered_curiosity(self):
+        target = TargetState(next_topic="未读消息涨到多少了")
+        target.remember({"feeling": "neutral", "desire": "open", "contact": "welcome",
+                         "note": "这话头不用继续", "shared_interests": [], "next_topic": ""}, 100, 300)
+        self.assertEqual(target.next_topic, "")
+
+    def test_unanswered_message_cannot_reuse_old_topic_or_private_thought_after_reload(self):
+        state = LeisureState(targets={"friend": TargetState(next_topic="饭吃没")})
+        state.targets["friend"].remember_thought("还想问饭吃没", "persona")
+        state.reserve("friend", "饭吃没？", 1000)
+        self.assertEqual(state.targets["friend"].impression()["next_topic"], "")
+        self.assertEqual(state.targets["friend"].thought_for("persona"), "")
+        restored = LeisureState.from_dict(asdict(state))
+        self.assertEqual(restored.targets["friend"].thought_for("persona"), "")
+        state.cancel_pending()
+        self.assertEqual(state.targets["friend"].next_topic, "饭吃没")
+
     def test_one_rhythm_and_target_pool_for_private_and_group_conversations(self):
         state = LeisureState()
         state.refresh_targets(["qq:GroupMessage:g", "wx:FriendMessage:p"])

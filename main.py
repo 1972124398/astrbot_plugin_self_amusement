@@ -410,6 +410,7 @@ class SelfAmusement(Star):
             return view, plan, "", sources
         self.activity = "想好怎么开口"
         material = {"action": plan["action"], "idea": plan["idea"], "sources": sources,
+                    "unanswered": target.unanswered, "companion": payload["companion"],
                     "recent_own_messages": [item.get("text", "") for item in recent],
                     "current_time": payload["current_time"],
                     "how_it_feels_with_you": payload["how_it_feels_with_you"],

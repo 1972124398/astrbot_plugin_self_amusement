@@ -52,7 +52,7 @@ class TargetState:
 
     def thought_for(self, persona: str) -> str:
         key = hashlib.sha256(persona.encode()).hexdigest()
-        return self.thought if self.thought_persona == key else ""
+        return self.thought if self.thought_persona == key and not self.unanswered else ""
 
     def remember_thought(self, thought: str, persona: str):
         self.thought = thought[:300]
@@ -62,7 +62,8 @@ class TargetState:
         self.impressions.append({key: impression[key] for key in ("feeling", "desire", "contact", "note")})
         self.impressions = self.impressions[-6:]
         self.shared_interests = list(dict.fromkeys([*impression["shared_interests"], *self.shared_interests]))[:6]
-        self.next_topic = impression["next_topic"] or self.next_topic
+        # An explicit empty choice means the model has let the old topic go.
+        self.next_topic = impression["next_topic"]
         self.wants_space = impression["contact"] == "space"
         self.available_after = now + busy_delay if impression["contact"] == "busy" else 0
 
@@ -70,7 +71,7 @@ class TargetState:
         return {
             "recent_feelings": self.impressions[-4:],
             "shared_interests": self.shared_interests,
-            "next_topic": self.next_topic,
+            "next_topic": self.next_topic if not self.unanswered else "",
             "unanswered": self.unanswered,
         }
 
@@ -206,7 +207,9 @@ class LeisureState:
         self.refresh_day(now)
         target = self.targets[origin]
         before = {"last_sent": target.last_sent, "last_outbound": self.last_outbound,
-                  "unanswered": target.unanswered, "day": self.day}
+                  "unanswered": target.unanswered, "day": self.day,
+                  "next_topic": target.next_topic}
+        target.next_topic = ""
         target.last_sent = now
         target.unanswered += 1
         self.last_outbound = now
@@ -223,6 +226,7 @@ class LeisureState:
             target.last_sent = before.get("last_sent", 0)
         if target and target.last_received <= pending["time"]:
             target.unanswered = before.get("unanswered", max(0, target.unanswered - 1))
+            target.next_topic = before.get("next_topic", target.next_topic)
         if self.last_outbound == pending["time"]:
             self.last_outbound = before.get("last_outbound", 0)
         if self.day == before.get("day", self.day):
