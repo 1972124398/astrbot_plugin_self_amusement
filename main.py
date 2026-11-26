@@ -162,6 +162,27 @@ class SelfAmusement(Star):
             for origin, texts in hints.items() if origin in self.state.targets
         }
 
+    async def companion_clear(self, origin, *, persona):
+        scope = conversation_key(origin)
+        pending = self.state.pending
+        if pending and conversation_key(pending["origin"]) == scope:
+            if self.sending or self.delivery_attempted:
+                return "busy"
+            self.state.cancel_pending()
+        for umo, target in self.state.targets.items():
+            if conversation_key(umo) == scope:
+                target.forget()
+        for cache in (self.recent_inputs, self.reflection_jobs):
+            for umo in list(cache):
+                if conversation_key(umo) == scope:
+                    cache.pop(umo)
+        self.state.recent = [row for row in self.state.recent if conversation_key(row["origin"]) != scope]
+        self.state.revision += 1
+        self.refresh_outbound_hints()
+        self.changed()
+        await self.persist()
+        return "cleared"
+
     def record_activity(self, origin, action, text, now, status):
         self.state.record(origin, action, text, now, status)
         self.refresh_outbound_hints()
@@ -493,12 +514,15 @@ class SelfAmusement(Star):
                 start = getattr(peer, "start_leisure_from_companion", None)
                 receipt = None
                 if (start and origin in self.eligible(time.time()) and self.permitted(origin)
-                        and await self.runtime.enabled(origin) and self.link.idle_current(idle_token)):
+                        and await self.runtime.enabled(origin) and revision == self.state.revision
+                        and self.link.idle_current(idle_token)):
                     receipt = start(origin, plan["idea"], {
                         "persona": view.persona[:3000], "recent_dialogue": view.history,
                         "interests": self.config.get("interests", []),
                         "mood": self.link.snapshot("short_term_mood", origin),
                     }, idle_token)
+                if revision != self.state.revision:
+                    return
                 self.activity = "悄悄动手做点小东西，做好再来" if receipt else "先把这个小念头留着"
                 self.record_activity(origin, "codex", plan["idea"], time.time(), "private")
                 await self.persist()
@@ -507,6 +531,8 @@ class SelfAmusement(Star):
                 play = self.link.peer("play_together", origin)
                 invite = getattr(play, "invite_from_companion", None)
                 invited = await invite(origin, plan["idea"], idle_token) if invite else False
+                if revision != self.state.revision:
+                    return
                 self.activity = "想找对方玩一小局" if invited else "这会儿先把玩心留着"
                 self.record_activity(origin, "play", "", time.time(), "private")
                 self.changed()
@@ -518,7 +544,8 @@ class SelfAmusement(Star):
                 return
             current = time.time()
             if (origin not in self.eligible(current) or not self.permitted(origin)
-                    or not await self.runtime.enabled(origin) or self.repetitive(origin, text, current)):
+                    or not await self.runtime.enabled(origin) or revision != self.state.revision
+                    or self.repetitive(origin, text, current)):
                 return
             if quiet_now(str(self.config.get("quiet_hours", "00:00-08:00") or ""), datetime.fromtimestamp(current)):
                 return
@@ -637,10 +664,13 @@ class SelfAmusement(Star):
         if getattr(response, "tools_call_args", None):
             return
         self.chat_finished(event)
+        job = event.get_extra("self_amusement_reflection")
+        target = self.state.targets.get(origin)
+        if job and (not target or target.interaction_version != job["version"]):
+            return
         self.state.engage(origin, time.time(), self.idle_delay(), human=False)
         if origin in self.recent_inputs:
             self.recent_inputs[origin] = compact_history([*self.recent_inputs[origin], {"role": "assistant", "content": response.completion_text or ""}])
-        job = event.get_extra("self_amusement_reflection")
         if job and self.social_enabled() and response.completion_text:
             self.reflection_jobs[origin] = {
                 **job, "history": compact_history([*job["history"], {"role": "assistant", "content": response.completion_text}]),

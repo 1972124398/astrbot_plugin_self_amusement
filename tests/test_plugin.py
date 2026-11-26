@@ -80,6 +80,24 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.cycle()
         self.plugin.runtime.deliver.assert_awaited_once()
 
+    async def test_companion_cleanup_removes_only_target_history(self):
+        other = "test:FriendMessage:other"
+        self.plugin.state.refresh_targets([self.origin, other])
+        selected = self.plugin.state.targets[self.origin]
+        selected.next_topic = "old topic"
+        self.plugin.state.targets[other].next_topic = "other topic"
+        for origin in (self.origin, other):
+            self.plugin.record_activity(origin, "chat", origin, time.time(), "sent")
+            self.plugin.recent_inputs[origin] = [{"role": "user", "content": origin}]
+        self.plugin.reflection_jobs[self.origin] = {"origin": self.origin}
+        self.assertEqual(await self.plugin.companion_clear(self.origin, persona="test"), "cleared")
+        self.assertFalse(selected.next_topic)
+        self.assertNotIn(self.origin, self.plugin.recent_inputs)
+        self.assertNotIn(self.origin, self.plugin.reflection_jobs)
+        self.assertNotIn(self.origin, self.plugin.outbound_hints)
+        self.assertIn(other, self.plugin.outbound_hints)
+        self.assertEqual(self.plugin.store.load().targets[other].next_topic, "other topic")
+
     async def test_no_targets_means_no_model_call_or_delivery(self):
         self.plugin.config["targets"] = []
         await self.plugin.cycle()
